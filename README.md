@@ -1,73 +1,201 @@
-# Welcome to your Lovable project
+# 🔐 Passkey Guardian
 
-## Project info
+A modern, passwordless authentication system built with WebAuthn/Passkeys. Say goodbye to passwords and embrace the future of secure, phishing-resistant authentication.
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+![Security](https://img.shields.io/badge/Security-WebAuthn-blue)
+![React](https://img.shields.io/badge/Frontend-React-61dafb)
+![Node.js](https://img.shields.io/badge/Backend-Node.js-339933)
+![Supabase](https://img.shields.io/badge/Database-Supabase-3fcf8e)
 
-## How can I edit this code?
+## ✨ Features
 
-There are several ways of editing your application.
+### 🔑 Passwordless Authentication
+- **Passkey Registration** - Register using biometrics (fingerprint, face) or hardware keys
+- **Passkey Login** - Authenticate instantly with your device
+- **Recovery Codes** - Backup codes for account recovery
 
-**Use Lovable**
+### 📱 Multi-Device Management
+- View all registered devices
+- Add new passkeys from any device
+- Rename devices for easy identification
+- Revoke compromised or lost devices
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
+### 🛡️ Advanced Security
+- **User Verification (UV) Enforcement** - Biometric/PIN required for login
+- **Challenge Expiration** - Prevents replay attacks (5-minute TTL)
+- **Re-Authentication** - Sensitive actions require identity confirmation
+- **Anti-Lockout Protection** - Cannot remove last device without recovery codes
+- **Risk-Based Alerts** - Monitors for suspicious activity
 
-Changes made via Lovable will be committed automatically to this repo.
+### 📊 Security Dashboard
+- Real-time security status
+- Activity log with detailed audit trail
+- Device management interface
+- Security alerts and notifications
 
-**Use your preferred IDE**
+## 🚀 Quick Start
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+### Prerequisites
+- Node.js 18+ & npm
+- Supabase account (or any PostgreSQL database)
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+### Installation
 
-Follow these steps:
+```bash
+# Clone the repository
+git clone https://github.com/Muzzu077/passkey-guardian.git
+cd passkey-guardian
 
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+# Install frontend dependencies
+npm install
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+# Install backend dependencies
+cd server
+npm install
+```
 
-# Step 3: Install the necessary dependencies.
-npm i
+### Environment Setup
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
+Create a `.env` file in the `server` directory:
+
+```env
+PORT=3000
+SUPABASE_URL=your_supabase_url
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+RP_ID=localhost
+RP_NAME=Passkey Guardian
+ORIGIN=http://localhost:8081
+SESSION_SECRET=your_super_secret_session_key
+```
+
+### Database Setup
+
+Run the following SQL in your Supabase SQL editor:
+
+```sql
+-- Users table
+CREATE TABLE users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    username TEXT UNIQUE NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Authenticators (Passkeys)
+CREATE TABLE authenticators (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    credential_id TEXT UNIQUE NOT NULL,
+    credential_public_key TEXT NOT NULL,
+    counter BIGINT DEFAULT 0,
+    transports TEXT[],
+    friendly_name TEXT,
+    last_used TIMESTAMPTZ,
+    revoked BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Recovery Codes
+CREATE TABLE recovery_codes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    code_hash TEXT NOT NULL,
+    used BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Audit Logs
+CREATE TABLE audit_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id),
+    action TEXT NOT NULL,
+    details JSONB,
+    ip_address TEXT,
+    user_agent TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+### Run the Application
+
+```bash
+# Terminal 1: Start backend
+cd server
+node index.js
+
+# Terminal 2: Start frontend
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+Visit `http://localhost:8081` to access the application.
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+## 🏗️ Tech Stack
 
-**Use GitHub Codespaces**
+| Layer | Technology |
+|-------|------------|
+| **Frontend** | React, TypeScript, Vite, Tailwind CSS, shadcn/ui |
+| **Backend** | Node.js, Express.js |
+| **Authentication** | @simplewebauthn/server & browser |
+| **Database** | Supabase (PostgreSQL) |
+| **Styling** | Tailwind CSS, Framer Motion |
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+## 📁 Project Structure
 
-## What technologies are used for this project?
+```
+passkey-guardian/
+├── src/                    # Frontend source
+│   ├── components/         # Reusable components
+│   ├── pages/              # Page components
+│   │   ├── Index.tsx       # Landing page
+│   │   ├── Register.tsx    # Passkey registration
+│   │   ├── Login.tsx       # Passkey login
+│   │   ├── Recovery.tsx    # Recovery code login
+│   │   └── Dashboard.tsx   # Security dashboard
+│   ├── hooks/              # Custom React hooks
+│   └── api.ts              # API client
+├── server/                 # Backend source
+│   ├── index.js            # Express server & routes
+│   └── db.js               # Supabase client
+└── README.md
+```
 
-This project is built with:
+## 🔒 Security Architecture
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Client (Browser)                     │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐  │
+│  │  Passkey    │  │  Recovery   │  │  Dashboard      │  │
+│  │  Auth       │  │  Codes      │  │  Management     │  │
+│  └──────┬──────┘  └──────┬──────┘  └────────┬────────┘  │
+└─────────┼────────────────┼──────────────────┼───────────┘
+          │                │                  │
+          ▼                ▼                  ▼
+┌─────────────────────────────────────────────────────────┐
+│                   Express Backend                        │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐  │
+│  │  WebAuthn   │  │  Session    │  │  Audit          │  │
+│  │  Challenge  │  │  Management │  │  Logging        │  │
+│  └──────┬──────┘  └──────┬──────┘  └────────┬────────┘  │
+└─────────┼────────────────┼──────────────────┼───────────┘
+          │                │                  │
+          ▼                ▼                  ▼
+┌─────────────────────────────────────────────────────────┐
+│                   Supabase (PostgreSQL)                  │
+│  ┌─────────┐  ┌──────────────┐  ┌──────────┐  ┌───────┐ │
+│  │  users  │  │authenticators│  │ recovery │  │ audit │ │
+│  │         │  │              │  │  _codes  │  │ _logs │ │
+│  └─────────┘  └──────────────┘  └──────────┘  └───────┘ │
+└─────────────────────────────────────────────────────────┘
+```
 
-## How can I deploy this project?
+## 🤝 Contributing
 
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
+Contributions are welcome! Please feel free to submit a Pull Request.
 
-## Can I connect a custom domain to my Lovable project?
+## 📄 License
 
-Yes, you can!
+This project is licensed under the MIT License.
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
+---
 
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+Built with ❤️ for a passwordless future
