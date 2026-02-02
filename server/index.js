@@ -32,7 +32,7 @@ dotenv.config();
 
 const app = express();
 app.use(cors({
-    origin: 'http://localhost:8080',
+    origin: ['http://localhost:8080', 'http://localhost:8081', 'http://127.0.0.1:8080', 'http://127.0.0.1:8081', 'http://localhost:5173'],
     credentials: true
 }));
 app.use(express.json());
@@ -133,197 +133,165 @@ app.post('/auth/logout', (req, res) => {
 // --- Registration ---
 
 app.post('/register/challenge', async (req, res) => {
-    const { username } = req.body;
+    try {
+        const { username } = req.body;
 
-    if (!username) {
-        return res.status(400).json({ error: 'Username is required' });
-    }
+        if (!username) {
+            return res.status(400).json({ error: 'Username is required' });
+        }
 
-    // Fetch user from DB
-    let { data: user, error } = await supabase
-        .from('users')
-        .select('*')
-        .eq('username', username)
-        .single();
+        console.log(`[REGISTER] Requesting challenge for ${username}`);
 
-    if (error && error.code !== 'PGRST116') { // PGRST116 is "not found"
-        console.error("Error fetching user:", error);
-        return res.status(500).json({ error: error.message });
-    }
+        // Fetch user from DB
+        let { data: user, error } = await supabase
+            .from('users')
+            .select('*')
+            .eq('username', username)
+            .single();
 
-    if (!user) {
-        // If user is already logged in, they are adding a device. 
-        // BUT here we are looking up by username from body. 
-        // If req.session.user matches username, assume Add Device flow.
-        if (req.session.user && req.session.user.username === username) {
-            user = { id: req.session.user.id, username: req.session.user.username };
-        } else {
-            // New user registration
-            const { data: newUser, error: createError } = await supabase
-                .from('users')
-                .insert([{ username }])
-                .select()
-                .single();
+        if (error && error.code !== 'PGRST116') {
+            console.error("Error fetching user:", error);
+            return res.status(500).json({ error: error.message });
+        }
 
-            if (createError) {
-                console.error("Error creating user:", createError);
-                return res.status(500).json({ error: createError.message });
+        if (!user) {
+            if (req.session.user && req.session.user.username === username) {
+                user = { id: req.session.user.id, username: req.session.user.username };
+            } else {
+                const { data: newUser, error: createError } = await supabase
+                    .from('users')
+                    .insert([{ username }])
+                    .select()
+                    .single();
+
+                if (createError) {
+                    console.error("Error creating user:", createError);
+                    return res.status(500).json({ error: createError.message });
+                }
+                user = newUser;
             }
-            user = newUser;
         }
-    } else {
-        // User exists in DB. 
-        // Strategy: If user is logged in AND matches, allow. 
-        // If NOT logged in, we shouldn't allow overwriting/registering unless we verify identity first?
-        // WebAuthn standard: if user exists and not logged in, usually you prompt to Login instead.
-        // For simplistic demo, we'll allow re-registration (adding device) if valid.
 
-        // IMPORTANT: If you want to strictly prevent "account takeover" by just knowing username:
-        // Only allow challenge generation for existing user IF req.session.user is set.
-        if (!req.session.user) {
-            // return res.status(403).json({ error: "User exists. Please login to add a device." });
-            // For now, keep open for demo purposes, or the "Add Device" button won't work easily without session check
-        }
+        const { data: authenticators } = await supabase
+            .from('authenticators')
+            .select('*')
+            .eq('user_id', user.id);
+
+        const userID = new Uint8Array(Buffer.from(user.id));
+
+        const options = await generateRegistrationOptions({
+            rpName: RP_NAME,
+            rpID: RP_ID,
+            userID: userID,
+            userName: user.username,
+            excludeCredentials: authenticators?.map(auth => ({
+                id: auth.credential_id,
+                transports: auth.transports,
+            })),
+            pubKeyCredParams: [{ alg: -7, type: 'public-key' }, { alg: -257, type: 'public-key' }],
+            authenticatorSelection: {
+                userVerification: 'preferred',
+                residentKey: 'preferred',
+            },
+        });
+
+        storeChallenge(user.id, options.challenge);
+        console.log(`[REGISTER] Challenge generated for ${username}`);
+
+        res.json(options);
+    } catch (err) {
+        console.error("[REGISTER] Challenge Error:", err);
+        res.status(500).json({ error: "Server failed to generate options", details: err.message });
     }
-
-    // Get user's existing authenticators
-    const { data: authenticators } = await supabase
-        .from('authenticators')
-        .select('*')
-        .eq('user_id', user.id);
-
-    // Convert UUID to Uint8Array for userID
-    // Ideally use a consistent byte array, but Buffer.from(uuid) works if consistent.
-    // Warning: WebAuthn userID should be stable.
-    const userID = new Uint8Array(Buffer.from(user.id));
-
-    const options = await generateRegistrationOptions({
-        rpName: RP_NAME,
-        rpID: RP_ID,
-        userID: userID,
-        userName: user.username,
-        // Don't re-register existing authenticators
-        excludeCredentials: authenticators?.map(auth => ({
-            id: auth.credential_id,
-            transports: auth.transports,
-        })),
-        // Support modern algs
-        pubKeyCredParams: [{ alg: -7, type: 'public-key' }, { alg: -257, type: 'public-key' }],
-        authenticatorSelection: {
-            userVerification: 'preferred',
-            residentKey: 'preferred',
-        },
-    });
-
-    // Store challenge with expiration
-    storeChallenge(user.id, options.challenge);
-
-    res.json(options);
 });
 
 app.post('/register/verify', async (req, res) => {
-    const { username, response } = req.body;
-
-    // Fetch user
-    const { data: user } = await supabase.from('users').select('*').eq('username', username).single();
-    if (!user) return res.status(400).json({ error: 'User not found' });
-
-    const expectedChallenge = getChallenge(user.id);
-    if (!expectedChallenge) {
-        console.error("Challenge not found or expired for user:", user.id);
-        return res.status(400).json({ error: 'Challenge not found or expired' });
-    }
-
-    console.log("Verifying registration for:", username);
-    console.log("Expected Challenge:", expectedChallenge);
-    console.log("Origin:", req.get('Origin'));
-    console.log("RP_ID:", RP_ID);
-
-    let verification;
     try {
-        verification = await verifyRegistrationResponse({
-            response,
-            expectedChallenge,
-            expectedOrigin: [ORIGIN, 'http://localhost:8081', 'http://127.0.0.1:8081'], // Allow both for dev
-            expectedRPID: RP_ID,
-        });
-    } catch (error) {
-        console.error("Verification Exception:", error);
-        return res.status(400).json({ error: error.message, details: "Verification failed on server" });
-    }
+        const { username, response } = req.body;
 
-    const { verified, registrationInfo } = verification;
+        // Fetch user
+        const { data: user } = await supabase.from('users').select('*').eq('username', username).single();
+        if (!user) return res.status(400).json({ error: 'User not found' });
 
-    if (verified && registrationInfo) {
-        let { credentialPublicKey, credentialID, counter } = registrationInfo;
-
-        // Fallback for different library versions/structures
-        if (!credentialID && registrationInfo.credential && registrationInfo.credential.id) {
-            credentialID = registrationInfo.credential.id;
-        }
-        if (!credentialPublicKey && registrationInfo.credential && registrationInfo.credential.publicKey) {
-            credentialPublicKey = registrationInfo.credential.publicKey;
+        const expectedChallenge = getChallenge(user.id);
+        if (!expectedChallenge) {
+            console.error("Challenge not found or expired for user:", user.id);
+            return res.status(400).json({ error: 'Challenge not found or expired' });
         }
 
-        if (!credentialID) {
-            logError("Missing credentialID in registrationInfo", { registrationInfo });
-            return res.status(500).json({ error: 'Verification succeeded but credentialID is missing', details: JSON.stringify(registrationInfo) });
-        }
-        if (!credentialPublicKey) {
-            logError("Missing credentialPublicKey in registrationInfo", { registrationInfo });
-            return res.status(500).json({ error: 'Verification succeeded but public key is missing' });
+        console.log("Verifying registration for:", username);
+        console.log("Expected Challenge:", expectedChallenge);
+        console.log("Origin:", req.get('Origin'));
+        console.log("RP_ID:", RP_ID);
+
+        let verification;
+        try {
+            verification = await verifyRegistrationResponse({
+                response,
+                expectedChallenge,
+                expectedOrigin: [ORIGIN, 'http://localhost:8080', 'http://localhost:8081', 'http://127.0.0.1:8080', 'http://127.0.0.1:8081'],
+                expectedRPID: RP_ID,
+            });
+        } catch (error) {
+            console.error("Verification Exception:", error);
+            return res.status(400).json({ error: error.message, details: "Verification failed on server" });
         }
 
-        // credentialID might be a string (base64url) or Buffer.
-        // If string, use as is. If Buffer, convert to base64url.
-        const credentialIDBase64 = typeof credentialID === 'string'
-            ? credentialID
-            : Buffer.from(credentialID).toString('base64url');
+        const { verified, registrationInfo } = verification;
 
-        // credentialPublicKey might be an object (JSON/Map) or Buffer. 
-        // If it's an object with numeric keys, convert to Buffer.
-        let publicKeyBuffer = credentialPublicKey;
-        if (publicKeyBuffer && typeof publicKeyBuffer === 'object' && !Buffer.isBuffer(publicKeyBuffer) && !(publicKeyBuffer instanceof Uint8Array)) {
-            // Handle "Array-like" object if needed, or if it's already a suitable object for Buffer.from
-            // The log showed {"0": 165...} which Buffer.from might not take directly without Object.values
-            publicKeyBuffer = Buffer.from(Object.values(credentialPublicKey));
+        if (verified && registrationInfo) {
+            let { credentialPublicKey, credentialID, counter } = registrationInfo;
+
+            if (!credentialID && registrationInfo.credential && registrationInfo.credential.id) {
+                credentialID = registrationInfo.credential.id;
+            }
+            if (!credentialPublicKey && registrationInfo.credential && registrationInfo.credential.publicKey) {
+                credentialPublicKey = registrationInfo.credential.publicKey;
+            }
+
+            const credentialIDBase64 = typeof credentialID === 'string'
+                ? credentialID
+                : Buffer.from(credentialID).toString('base64url');
+
+            let publicKeyBuffer = credentialPublicKey;
+            if (publicKeyBuffer && typeof publicKeyBuffer === 'object' && !Buffer.isBuffer(publicKeyBuffer) && !(publicKeyBuffer instanceof Uint8Array)) {
+                publicKeyBuffer = Buffer.from(Object.values(credentialPublicKey));
+            } else {
+                publicKeyBuffer = Buffer.from(publicKeyBuffer);
+            }
+
+            const publicKeyBase64 = publicKeyBuffer.toString('base64');
+
+            const { error } = await supabase.from('authenticators').insert({
+                user_id: user.id,
+                credential_id: credentialIDBase64,
+                public_key: publicKeyBase64,
+                counter: counter,
+                transports: response.response.transports || [],
+                friendly_name: 'New Device',
+                last_used: new Date(),
+                revoked: false
+            });
+
+            if (error) {
+                logError("DB Insert Error:", error);
+                logAudit(user.id, 'REGISTER_FAIL', { error: error.message }, req);
+                return res.status(500).json({ error: 'Failed to save credential', details: error.message });
+            }
+
+            challengeStore.delete(user.id);
+
+            req.session.user = { id: user.id, username: user.username };
+
+            logAudit(user.id, 'REGISTER_SUCCESS', { credential_id: credentialIDBase64 }, req);
+
+            res.json({ verified: true });
         } else {
-            publicKeyBuffer = Buffer.from(publicKeyBuffer);
+            res.status(400).json({ verified: false });
         }
-
-        const publicKeyBase64 = publicKeyBuffer.toString('base64');
-
-        // Detect device type from transports or registrationInfo
-        // You can parse AAGUID here if needed for friendly names like "iCloud Keychain"
-
-        const { error } = await supabase.from('authenticators').insert({
-            user_id: user.id,
-            credential_id: credentialIDBase64,
-            public_key: publicKeyBase64,
-            counter: counter,
-            transports: response.response.transports || [],
-            friendly_name: 'New Device', // Default name, user can rename later
-            last_used: new Date(),
-            revoked: false
-        });
-
-        if (error) {
-            logError("DB Insert Error:", error);
-            // ... logs
-            logAudit(user.id, 'REGISTER_FAIL', { error: error.message }, req);
-            return res.status(500).json({ error: 'Failed to save credential', details: error.message });
-        }
-
-        challengeStore.delete(user.id);
-
-        // Auto login
-        req.session.user = { id: user.id, username: user.username };
-
-        logAudit(user.id, 'REGISTER_SUCCESS', { credential_id: credentialIDBase64 }, req);
-
-        res.json({ verified: true });
-    } else {
-        res.status(400).json({ verified: false });
+    } catch (err) {
+        console.error("[REGISTER] Verify Error:", err);
+        res.status(500).json({ error: "Server failed to verify registration", details: err.message });
     }
 });
 

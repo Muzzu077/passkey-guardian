@@ -50,11 +50,15 @@ const Register = () => {
 
     try {
       // 1. Get challenge from server
+      console.log("Requesting challenge...");
       const resp = await api.post(endpoints.registerChallenge, { username: email });
+      console.log("Challenge received:", resp.data);
       const options = resp.data;
 
       // 2. Browser handles the credential creation
+      console.log("Starting WebAuthn flow...");
       const regResp = await startRegistration({ optionsJSON: options });
+      console.log("WebAuthn Response:", regResp);
 
       // 3. Send response to server
       const verificationResp = await api.post(endpoints.registerVerify, {
