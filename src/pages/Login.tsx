@@ -6,9 +6,14 @@ import { AuthLayout } from "@/components/auth/AuthLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { startAuthentication } from "@simplewebauthn/browser";
+import { api, endpoints } from "@/api";
 import { useToast } from "@/hooks/use-toast";
 
+import { useAuth } from "@/hooks/use-auth";
+
 const Login = () => {
+  const { checkAuth } = useAuth();
   const [email, setEmail] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +39,6 @@ const Login = () => {
       return;
     }
 
-    // Check WebAuthn support
     if (!window.PublicKeyCredential) {
       setError("Your browser doesn't support passkeys. Please use a modern browser.");
       return;
@@ -43,17 +47,32 @@ const Login = () => {
     setIsLoading(true);
 
     try {
-      // TODO: Implement actual WebAuthn authentication flow
-      // This will be connected to the backend edge functions
-      
-      toast({
-        title: "Welcome back!",
-        description: "Successfully authenticated with your passkey.",
+      // 1. Get challenge
+      const resp = await api.post(endpoints.loginChallenge, { username: email });
+      const options = resp.data;
+
+      // 2. Authenticate with browser
+      const authResp = await startAuthentication({ optionsJSON: options });
+
+      // 3. Verify
+      const verificationResp = await api.post(endpoints.loginVerify, {
+        username: email,
+        response: authResp,
       });
 
-      navigate("/dashboard");
-    } catch (err) {
-      setError("Authentication failed. Please try again.");
+      if (verificationResp.data.verified) {
+        await checkAuth();
+        toast({
+          title: "Welcome back!",
+          description: "Successfully authenticated with your passkey.",
+        });
+        navigate("/dashboard");
+      } else {
+        setError("Authentication failed.");
+      }
+    } catch (err: any) {
+      console.error(err);
+      setError(err.response?.data?.error || err.message || "Authentication failed. Please try again.");
     } finally {
       setIsLoading(false);
     }
@@ -115,28 +134,23 @@ const Login = () => {
           )}
         </Button>
 
-        {/* Recovery link */}
-        <div className="text-center">
-          <Link
-            to="/recovery"
-            className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <KeyRound className="w-4 h-4" />
-            Use recovery code
-          </Link>
-        </div>
-
-        {/* Register link */}
-        <div className="text-center pt-4 border-t border-border/50">
-          <p className="text-sm text-muted-foreground">
+        {/* Footer links */}
+        <div className="text-center pt-4 border-t border-border/50 text-sm space-y-2">
+          <p className="text-muted-foreground">
             Don't have an account?{" "}
             <Link
               to="/register"
               className="text-primary hover:text-primary/80 font-medium transition-colors"
             >
-              Create one now
+              create one
             </Link>
           </p>
+          <Link
+            to="/recovery"
+            className="block text-muted-foreground hover:text-destructive transition-colors text-xs"
+          >
+            Lost your passkey? Use a recovery code
+          </Link>
         </div>
       </form>
     </AuthLayout>

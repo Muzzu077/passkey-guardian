@@ -6,12 +6,19 @@ import { AuthLayout } from "@/components/auth/AuthLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { startRegistration } from "@simplewebauthn/browser";
+import { api, endpoints } from "@/api";
 import { useToast } from "@/hooks/use-toast";
 
+import { useAuth } from "@/hooks/use-auth";
+
 const Register = () => {
+  const { checkAuth } = useAuth();
   const [email, setEmail] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [step, setStep] = useState<'register' | 'recovery'>('register');
+  const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -34,7 +41,6 @@ const Register = () => {
       return;
     }
 
-    // Check WebAuthn support
     if (!window.PublicKeyCredential) {
       setError("Your browser doesn't support passkeys. Please use a modern browser.");
       return;
@@ -43,22 +49,88 @@ const Register = () => {
     setIsLoading(true);
 
     try {
-      // TODO: Implement actual WebAuthn registration flow
-      // This will be connected to the backend edge functions
-      
-      toast({
-        title: "Passkey Created!",
-        description: "Your account has been secured with a passkey.",
+      // 1. Get challenge from server
+      const resp = await api.post(endpoints.registerChallenge, { username: email });
+      const options = resp.data;
+
+      // 2. Browser handles the credential creation
+      const regResp = await startRegistration({ optionsJSON: options });
+
+      // 3. Send response to server
+      const verificationResp = await api.post(endpoints.registerVerify, {
+        username: email,
+        response: regResp,
       });
 
-      // Navigate to dashboard after successful registration
-      navigate("/dashboard");
-    } catch (err) {
-      setError("Failed to create passkey. Please try again.");
+      if (verificationResp.data.verified) {
+        await checkAuth();
+
+        // Auto-generate recovery codes immediately
+        try {
+          const codesResp = await api.post(endpoints.recoveryCodes);
+          setRecoveryCodes(codesResp.data.codes);
+          setStep('recovery'); // Switch to recovery view
+          toast({
+            title: "Account Created!",
+            description: "Please save your recovery codes now.",
+          });
+        } catch (codeErr) {
+          console.error("Failed to generate codes:", codeErr);
+          // If code generation fails, just go to dashboard but warn user
+          toast({
+            title: "Account Created",
+            description: "could not generate recovery codes. Please generate them in dashboard.",
+            variant: "destructive"
+          });
+          navigate("/dashboard");
+        }
+      } else {
+        setError("Verification failed. Please try again.");
+      }
+    } catch (err: any) {
+      console.error("Full Error Object:", err);
+      if (err.response && err.response.data) {
+        console.error("Server Error Response:", err.response.data);
+        const serverMsg = err.response.data.error;
+        const serverDetails = err.response.data.details;
+        setError(`Server Error: ${serverMsg} ${serverDetails ? `(${serverDetails})` : ''}`);
+      } else {
+        setError(err.message || "Failed to create passkey.");
+      }
     } finally {
       setIsLoading(false);
     }
   };
+
+  const handleFinish = () => {
+    navigate("/dashboard");
+  };
+
+  if (step === 'recovery') {
+    return (
+      <AuthLayout
+        title="Save Recovery Code"
+        subtitle="If you lose your device, this code is the ONLY way to recover your account."
+      >
+        <div className="space-y-6">
+          <div className="p-4 bg-secondary/50 rounded-lg border border-border text-center space-y-4">
+            <p className="text-sm text-yellow-500 font-semibold">Store this safely. It will check once.</p>
+            <div className="grid grid-cols-1 gap-2">
+              {recoveryCodes.map((code, idx) => (
+                <div key={idx} className="font-mono text-xl tracking-wider text-primary bg-background p-3 rounded border border-border/50 select-all">
+                  {code}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <Button onClick={handleFinish} className="w-full py-6 text-lg bg-green-600 hover:bg-green-700">
+            I have saved this code
+          </Button>
+        </div>
+      </AuthLayout>
+    );
+  }
 
   return (
     <AuthLayout
