@@ -143,11 +143,13 @@ app.post('/register/challenge', async (req, res) => {
         console.log(`[REGISTER] Requesting challenge for ${username}`);
 
         // Fetch user from DB
+        console.log("[REGISTER] Fetching user from DB...");
         let { data: user, error } = await supabase
             .from('users')
             .select('*')
             .eq('username', username)
             .single();
+        console.log("[REGISTER] User fetch result:", user ? "Found" : "Not Found", error ? error.code : "No Error");
 
         if (error && error.code !== 'PGRST116') {
             console.error("Error fetching user:", error);
@@ -156,8 +158,10 @@ app.post('/register/challenge', async (req, res) => {
 
         if (!user) {
             if (req.session.user && req.session.user.username === username) {
+                console.log("[REGISTER] Using session user for new device.");
                 user = { id: req.session.user.id, username: req.session.user.username };
             } else {
+                console.log("[REGISTER] Creating new user...");
                 const { data: newUser, error: createError } = await supabase
                     .from('users')
                     .insert([{ username }])
@@ -168,17 +172,21 @@ app.post('/register/challenge', async (req, res) => {
                     console.error("Error creating user:", createError);
                     return res.status(500).json({ error: createError.message });
                 }
+                console.log("[REGISTER] New user created:", newUser.id);
                 user = newUser;
             }
         }
 
+        console.log("[REGISTER] Fetching authenticators...");
         const { data: authenticators } = await supabase
             .from('authenticators')
             .select('*')
             .eq('user_id', user.id);
+        console.log("[REGISTER] Authenticators fetched:", authenticators?.length || 0);
 
         const userID = new Uint8Array(Buffer.from(user.id));
 
+        console.log("[REGISTER] Generating WebAuthn options...");
         const options = await generateRegistrationOptions({
             rpName: RP_NAME,
             rpID: RP_ID,
@@ -194,6 +202,7 @@ app.post('/register/challenge', async (req, res) => {
                 residentKey: 'preferred',
             },
         });
+        console.log("[REGISTER] WebAuthn options generated.");
 
         storeChallenge(user.id, options.challenge);
         console.log(`[REGISTER] Challenge generated for ${username}`);
