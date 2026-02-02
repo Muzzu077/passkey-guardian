@@ -236,19 +236,20 @@ app.post('/register/verify', async (req, res) => {
 
     console.log("Verifying registration for:", username);
     console.log("Expected Challenge:", expectedChallenge);
-    // console.log("Response:", JSON.stringify(response)); // Be careful logging full response
+    console.log("Origin:", req.get('Origin'));
+    console.log("RP_ID:", RP_ID);
 
     let verification;
     try {
         verification = await verifyRegistrationResponse({
             response,
             expectedChallenge,
-            expectedOrigin: ORIGIN,
+            expectedOrigin: [ORIGIN, 'http://localhost:8081', 'http://127.0.0.1:8081'], // Allow both for dev
             expectedRPID: RP_ID,
         });
     } catch (error) {
         console.error("Verification Exception:", error);
-        return res.status(400).json({ error: error.message });
+        return res.status(400).json({ error: error.message, details: "Verification failed on server" });
     }
 
     const { verified, registrationInfo } = verification;
