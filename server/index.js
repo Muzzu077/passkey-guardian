@@ -97,21 +97,7 @@ app.get('/', (req, res) => {
 
 // --- Registration ---
 
-app.post('/register/challenge', async (req, res) => {
-    // ... (existing user fetch logic)
-    const { username } = req.body;
 
-    // ... (existing user creation/lookup logic -lines 80-138)
-
-    // REPLACEMENT PART STARTS AFTER: const { username } = req.body; ... until challenge generation
-
-    // (We need to keep the user lookup logic mostly as is, so I will target specific blocks carefully or rewrite the whole function if easier.
-    // Given "AllowMultiple: true", I will try to target specific chunks for specific improvements)
-    // Actually, replacing the whole endpoint blocks is safer to ensure context integrity with the new helpers.
-
-    // Wait, let's use the helper helpers first.
-    // I will replace the challengeStore.set and .get calls in the existing endpoints.
-});
 
 // ...
 
